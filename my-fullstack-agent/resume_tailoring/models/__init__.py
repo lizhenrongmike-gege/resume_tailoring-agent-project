@@ -10,6 +10,12 @@ from .tailoring_models import (
     RefinedExperience,
     TailoredExperienceBank,
 )
+
+from .plan_models import (
+    EvidenceCitation,
+    BulletEdit,
+    ResumeEditPlan,
+)
 from .quality_models import QualityFeedback
 from .format_models import ResumeFormat
 

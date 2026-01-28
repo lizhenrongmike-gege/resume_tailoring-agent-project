@@ -215,3 +215,81 @@ def _generate_docx(
 
 # Create FunctionTool instance
 generate_docx_tool = FunctionTool(func=_generate_docx)
+
+
+def _tailor_docx_in_place(
+    base_resume_path: str,
+    edits_json: str,
+    output_path: Optional[str] = None,
+    tool_context: Optional[ToolContext] = None,
+) -> dict:
+    """Tailor an existing resume .docx by replacing bullet paragraphs in-place.
+
+    This is the preferred path for strict formatting preservation:
+    - no new sections
+    - no summary line
+    - only edits existing bullets that match exactly
+
+    Args:
+      base_resume_path: Path to the existing resume (.docx).
+      edits_json: JSON list of BulletEdit-like objects with fields: old_bullet, new_bullet.
+      output_path: Output .docx path; defaults to session state's output_path.
+      tool_context: ADK tool context.
+
+    Returns:
+      status + output_path + counts.
+    """
+    try:
+        if not output_path and tool_context:
+            output_path = tool_context.state.get("output_path", "./tailored_resume.docx")
+        elif not output_path:
+            output_path = "./tailored_resume.docx"
+
+        edits = json.loads(edits_json)
+        doc = Document(base_resume_path)
+
+        # Build quick lookup map (normalized text -> list of paragraph indices)
+        def norm(s: str) -> str:
+            return " ".join((s or "").split()).strip()
+
+        idx_map: dict[str, list[int]] = {}
+        for i, p in enumerate(doc.paragraphs):
+            t = norm(p.text)
+            if not t:
+                continue
+            idx_map.setdefault(t, []).append(i)
+
+        replaced = 0
+        missing = 0
+        for e in edits:
+            old = norm(e.get("old_bullet", ""))
+            new = e.get("new_bullet", "")
+            if not old:
+                continue
+            hits = idx_map.get(old, [])
+            if not hits:
+                missing += 1
+                continue
+            # Replace the first occurrence; duplicates are rare but possible.
+            p = doc.paragraphs[hits[0]]
+            p.text = new
+            replaced += 1
+
+        doc.save(output_path)
+        return {
+            "status": "success",
+            "output_path": output_path,
+            "replaced": replaced,
+            "missing": missing,
+        }
+
+    except Exception as e:
+        return {
+            "status": "error",
+            "output_path": output_path,
+            "error_message": str(e),
+        }
+
+
+# Tool for in-place tailoring
+tailor_docx_in_place_tool = FunctionTool(func=_tailor_docx_in_place)
