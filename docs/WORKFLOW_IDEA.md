@@ -16,6 +16,7 @@ This workflow reduces randomness by forcing every agent step to produce **struct
 1) **Ingest & normalize**
 - Validate all inputs are present.
 - Normalize resume to a consistent format.
+- Parse experience-bank doc (paragraphs) into structured records.
 
 2) **JD extraction (structured)**
 Produce `jd_profile.json` with:

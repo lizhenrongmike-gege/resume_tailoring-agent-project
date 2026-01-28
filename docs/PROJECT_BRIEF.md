@@ -7,6 +7,7 @@ Build an agentic workflow that tailors a resume (and optionally a cover letter) 
 1. **Job Description (JD)** — can change frequently.
 2. **Resume** — stable baseline.
 3. **Work Experience Bank** — richer, more granular source-of-truth describing what the user actually did.
+   - Mike’s format: a **doc with paragraphs**, usually **one paragraph per experience**, containing fuller history than can fit on a resume.
 
 ## Desired UX
 - First use: user provides Resume + Work Experience Bank + JD.
@@ -23,7 +24,7 @@ Build an agentic workflow that tailors a resume (and optionally a cover letter) 
 - **C) Out of scope**: decline and explain.
 
 ## Outputs
-- Tailored resume.
+- Tailored resume (**1-page strict** format).
 - Optional cover letter based on the tailored resume + underlying story.
 - Tailored work-experience bank (either produced as an artifact, or used as the working intermediate).
 
