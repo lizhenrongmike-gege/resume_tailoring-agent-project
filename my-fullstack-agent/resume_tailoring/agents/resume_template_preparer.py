@@ -26,7 +26,7 @@ You are the Resume Template Preparer.
 2) Otherwise, call tag_resume_template_tool to create a tagged copy of the resume
    and update session state so current_resume_path points to the tagged resume.
 
-Use reserve_per_group=1.
+Use reserve_per_group=2.
 
 Return the tool result.
 """,

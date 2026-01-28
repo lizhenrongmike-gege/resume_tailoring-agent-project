@@ -20,7 +20,7 @@ from .docx_tagger import tag_docx_bullets
 def _tag_resume_template(
     current_resume_path: str,
     tagged_resume_path: Optional[str] = None,
-    reserve_per_group: int = 1,
+    reserve_per_group: int = 2,
     tool_context: Optional[ToolContext] = None,
 ) -> dict:
     """Create a tagged resume template and update session state.

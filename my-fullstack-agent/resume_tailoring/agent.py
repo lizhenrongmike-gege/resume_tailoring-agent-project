@@ -10,8 +10,6 @@ from .agents import (
     resume_template_preparer,
     input_processor,
     job_research_agent,
-    experience_refiner_agent,
-    experience_bank_saver,
     resume_planner_agent,
     resume_writer_agent,
 )
@@ -64,10 +62,8 @@ resume_tailoring_pipeline = SequentialAgent(
         resume_template_preparer,  # Phase 0: Tag resume template w/ bullet IDs + reserve slots
         input_processor,           # Phase 1: Read documents and detect formatting
         job_research_agent,        # Phase 2: Research job + conservative feasibility analysis
-        experience_refiner_agent,  # Phase 3: Content strategist - creates TailoredExperienceBank
-        experience_bank_saver,     # Phase 3.5: Save experience bank to JSON file
-        resume_planner_agent,      # Phase 3.75: Produce a bullet-level edit plan (auditable)
-        resume_writer_agent,       # Phase 4: Apply plan + generate resume docx
+        resume_planner_agent,      # Phase 3: Produce a bullet-level edit plan (auditable)
+        resume_writer_agent,       # Phase 4: Apply plan to the existing resume docx (no new sections)
     ],
 )
 
