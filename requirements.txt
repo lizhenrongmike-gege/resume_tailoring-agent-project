@@ -1,3 +1,18 @@
-python-docx
-pydantic
-rapidfuzz
+# Resume tailoring agent dependencies
+# Install: pip install -r requirements.txt
+
+# Core
+pydantic>=2.6
+rapidfuzz>=3.0
+
+# Document IO
+python-docx>=1.1
+pdfplumber>=0.11
+
+# Env
+python-dotenv>=1.0
+
+# Google ADK / GenAI stack (required to run my-fullstack-agent/resume_tailoring)
+# NOTE: Pin/adjust these if you have a preferred ADK version.
+google-adk
+google-auth
