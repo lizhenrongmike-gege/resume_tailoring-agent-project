@@ -50,7 +50,8 @@ existing structure must be preserved.
 
 **OUTPUT:**
 Return a ResumeEditPlan where:
-- old_bullet exactly matches the line from current_resume_content.
+- If the resume has bookmark IDs available, include bullet_id (recommended).
+  - If you don't have IDs, use old_bullet as fallback.
 - new_bullet is the replacement.
 - evidence cites the relevant experience paragraph(s).
 """,

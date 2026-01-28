@@ -248,32 +248,49 @@ def _tailor_docx_in_place(
         edits = json.loads(edits_json)
         doc = Document(base_resume_path)
 
-        # Build quick lookup map (normalized text -> list of paragraph indices)
         def norm(s: str) -> str:
             return " ".join((s or "").split()).strip()
 
-        idx_map: dict[str, list[int]] = {}
+        # Index paragraphs by bookmark name (preferred) and by exact text (fallback).
+        bookmark_map: dict[str, int] = {}
+        text_map: dict[str, list[int]] = {}
+
         for i, p in enumerate(doc.paragraphs):
             t = norm(p.text)
-            if not t:
-                continue
-            idx_map.setdefault(t, []).append(i)
+            if t:
+                text_map.setdefault(t, []).append(i)
+
+            # Parse bookmarks (WordprocessingML)
+            try:
+                for child in p._p.iterchildren():
+                    if child.tag == qn("w:bookmarkStart"):
+                        name = child.get(qn("w:name"))
+                        if name:
+                            bookmark_map[name] = i
+            except Exception:
+                pass
 
         replaced = 0
         missing = 0
+
         for e in edits:
-            old = norm(e.get("old_bullet", ""))
+            bid = e.get("bullet_id") or e.get("id")  # allow legacy naming
             new = e.get("new_bullet", "")
-            if not old:
+
+            if bid and bid in bookmark_map:
+                doc.paragraphs[bookmark_map[bid]].text = new
+                replaced += 1
                 continue
-            hits = idx_map.get(old, [])
-            if not hits:
-                missing += 1
-                continue
-            # Replace the first occurrence; duplicates are rare but possible.
-            p = doc.paragraphs[hits[0]]
-            p.text = new
-            replaced += 1
+
+            old = norm(e.get("old_bullet", ""))
+            if old:
+                hits = text_map.get(old, [])
+                if hits:
+                    doc.paragraphs[hits[0]].text = new
+                    replaced += 1
+                    continue
+
+            missing += 1
 
         doc.save(output_path)
         return {

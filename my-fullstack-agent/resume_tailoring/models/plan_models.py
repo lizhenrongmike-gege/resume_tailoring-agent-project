@@ -31,7 +31,20 @@ class BulletEdit(BaseModel):
     experience: str = Field(
         description="Which resume section/experience this bullet belongs to (e.g. 'Ant Group')."
     )
-    old_bullet: str = Field(description="Exact bullet text as it appears in the current resume.")
+
+    bullet_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "Preferred identifier for this bullet (bookmark ID inside the DOCX). "
+            "If present, the applier should use this instead of old_bullet."
+        ),
+    )
+
+    old_bullet: Optional[str] = Field(
+        default=None,
+        description="Fallback: exact bullet text as it appears in the current resume.",
+    )
+
     new_bullet: str = Field(
         description=(
             "Replacement bullet. Must be truthful and grounded in evidence. "
