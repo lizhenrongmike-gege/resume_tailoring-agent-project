@@ -215,3 +215,98 @@ def _generate_docx(
 
 # Create FunctionTool instance
 generate_docx_tool = FunctionTool(func=_generate_docx)
+
+
+def _tailor_docx_in_place(
+    base_resume_path: str,
+    edits_json: str,
+    output_path: Optional[str] = None,
+    tool_context: Optional[ToolContext] = None,
+) -> dict:
+    """Tailor an existing resume .docx by replacing bullet paragraphs in-place.
+
+    This is the preferred path for strict formatting preservation:
+    - no new sections
+    - no summary line
+    - only edits existing bullets that match exactly
+
+    Args:
+      base_resume_path: Path to the existing resume (.docx).
+      edits_json: JSON list of BulletEdit-like objects with fields: old_bullet, new_bullet.
+      output_path: Output .docx path; defaults to session state's output_path.
+      tool_context: ADK tool context.
+
+    Returns:
+      status + output_path + counts.
+    """
+    try:
+        if not output_path and tool_context:
+            output_path = tool_context.state.get("output_path", "./tailored_resume.docx")
+        elif not output_path:
+            output_path = "./tailored_resume.docx"
+
+        edits = json.loads(edits_json)
+        doc = Document(base_resume_path)
+
+        def norm(s: str) -> str:
+            return " ".join((s or "").split()).strip()
+
+        # Index paragraphs by bookmark name (preferred) and by exact text (fallback).
+        bookmark_map: dict[str, int] = {}
+        text_map: dict[str, list[int]] = {}
+
+        for i, p in enumerate(doc.paragraphs):
+            t = norm(p.text)
+            if t:
+                text_map.setdefault(t, []).append(i)
+
+            # Parse bookmarks (WordprocessingML)
+            try:
+                for child in p._p.iterchildren():
+                    if child.tag == qn("w:bookmarkStart"):
+                        name = child.get(qn("w:name"))
+                        if name:
+                            bookmark_map[name] = i
+            except Exception:
+                pass
+
+        replaced = 0
+        missing = 0
+
+        for e in edits:
+            bid = e.get("bullet_id") or e.get("id")  # allow legacy naming
+            new = e.get("new_bullet", "")
+
+            if bid and bid in bookmark_map:
+                doc.paragraphs[bookmark_map[bid]].text = new
+                replaced += 1
+                continue
+
+            old = norm(e.get("old_bullet", ""))
+            if old:
+                hits = text_map.get(old, [])
+                if hits:
+                    doc.paragraphs[hits[0]].text = new
+                    replaced += 1
+                    continue
+
+            missing += 1
+
+        doc.save(output_path)
+        return {
+            "status": "success",
+            "output_path": output_path,
+            "replaced": replaced,
+            "missing": missing,
+        }
+
+    except Exception as e:
+        return {
+            "status": "error",
+            "output_path": output_path,
+            "error_message": str(e),
+        }
+
+
+# Tool for in-place tailoring
+tailor_docx_in_place_tool = FunctionTool(func=_tailor_docx_in_place)
