@@ -7,6 +7,7 @@ from google.adk.tools.tool_context import ToolContext
 
 from .config import config
 from .agents import (
+    resume_template_preparer,
     input_processor,
     job_research_agent,
     experience_refiner_agent,
@@ -60,6 +61,7 @@ resume_tailoring_pipeline = SequentialAgent(
     name="resume_tailoring_pipeline",
     description="Strategy-First Resume Tailoring Pipeline: reads inputs, researches job with feasibility analysis, creates strategy document, generates polished resume",
     sub_agents=[
+        resume_template_preparer,  # Phase 0: Tag resume template w/ bullet IDs + reserve slots
         input_processor,           # Phase 1: Read documents and detect formatting
         job_research_agent,        # Phase 2: Research job + conservative feasibility analysis
         experience_refiner_agent,  # Phase 3: Content strategist - creates TailoredExperienceBank
