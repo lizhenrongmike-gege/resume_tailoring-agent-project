@@ -1,0 +1,13 @@
+# Private inputs (do not commit)
+/private/
+
+# Runs/history
+/runs/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# OS
+.DS_Store
