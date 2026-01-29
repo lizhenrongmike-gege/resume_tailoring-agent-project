@@ -11,6 +11,7 @@ from .agents import (
     input_processor,
     job_research_agent,
     resume_planner_agent,
+    plan_validator_agent,
     resume_writer_agent,
 )
 
@@ -63,6 +64,7 @@ resume_tailoring_pipeline = SequentialAgent(
         input_processor,           # Phase 1: Read documents and detect formatting
         job_research_agent,        # Phase 2: Research job + conservative feasibility analysis
         resume_planner_agent,      # Phase 3: Produce a bullet-level edit plan (auditable)
+        plan_validator_agent,      # Phase 3.5: Deterministically lint + gate the plan
         resume_writer_agent,       # Phase 4: Apply plan to the existing resume docx (no new sections)
     ],
 )
