@@ -1,0 +1,15 @@
+Data Analyst (Sample)
+
+Responsibilities
+- Build and maintain SQL queries and dashboards to track key business metrics.
+- Clean, normalize, and validate data from multiple sources; document data quality issues.
+- Perform ad-hoc analysis and communicate insights to stakeholders.
+- Partner with product/ops teams to define KPIs and improve reporting workflows.
+- Support experimentation and cohort analysis (funnels, retention, segmentation).
+
+Requirements
+- Strong SQL and data modeling fundamentals.
+- Proficiency in Python for analysis/automation.
+- Experience with BI tools and data visualization.
+- Familiarity with statistics (hypothesis testing) and metrics design.
+- Excellent communication and ability to translate data into decisions.
