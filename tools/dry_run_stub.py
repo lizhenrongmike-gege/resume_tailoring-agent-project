@@ -183,6 +183,44 @@ GENERIC_TOKENS = {
     "built",
 }
 
+# Deterministic priors used to stabilize experience selection.
+#
+# Goal: when overlap scores are close, prefer experiences that are:
+# - more recent
+# - contain more hard skills/tools (SQL, Python, ETL, forecasting, ...)
+# - optionally “pinned” by the user (env var)
+HARD_SKILL_TOKENS = {
+    "python",
+    "sql",
+    "excel",
+    "tableau",
+    "powerbi",
+    "power_bi",
+    "spark",
+    "pyspark",
+    "hadoop",
+    "airflow",
+    "dbt",
+    "etl",
+    "pipeline",
+    "pipelines",
+    "forecast",
+    "forecasting",
+    "nowcasting",
+    "time_series",
+    "regression",
+    "classification",
+    "clustering",
+    "nlp",
+    "llm",
+}
+
+# Weighting knobs (keep overlap dominant).
+OVERLAP_MULTIPLIER = 10
+HARD_SKILL_BOOST_PER_MATCH = 2
+PINNED_EXP_BONUS = 25  # additive to total score
+RECENCY_BOOST_MAX = 6  # additive to total score (scaled 0..RECENCY_BOOST_MAX)
+
 
 def _read_text(path: str) -> str:
     with open(path, "r", encoding="utf-8") as f:
@@ -369,6 +407,40 @@ def extract_evidence_snippets(exp_body: str) -> List[dict]:
     return out
 
 
+def _extract_years(text: str) -> List[int]:
+    # Very small heuristic: pull 4-digit years.
+    years = [int(y) for y in re.findall(r"\b(19\d{2}|20\d{2})\b", text)]
+    return [y for y in years if 1900 <= y <= 2100]
+
+
+def _recency_score(dates: str | None, ref_year: int | None) -> int:
+    """Return an integer 0..RECENCY_BOOST_MAX."""
+
+    if not dates or not ref_year:
+        return 0
+
+    years = _extract_years(dates)
+    if not years:
+        return 0
+
+    last_year = max(years)
+    # If last_year == ref_year => max score. If older, decay.
+    age = max(0, ref_year - last_year)
+    return max(0, RECENCY_BOOST_MAX - age)
+
+
+def _pinned_exp_ids_from_env() -> set[str]:
+    raw = os.environ.get("RESUME_TAILOR_PIN_EXP_IDS", "").strip()
+    if not raw:
+        return set()
+    return {x.strip() for x in raw.split(",") if x.strip()}
+
+
+def _hard_skill_match_count(text: str) -> int:
+    toks = set(_extract_terms(text))
+    return sum(1 for t in HARD_SKILL_TOKENS if t in toks)
+
+
 def score_overlap(jd_keywords: set[str], text: str) -> int:
     toks = set(_extract_terms(text))
     return len(jd_keywords.intersection(toks))
@@ -378,14 +450,47 @@ def build_artifacts(jd_text: str, experiences: List[Experience], max_exps: int =
     jd_kw = _top_keywords(jd_text, k=60)
     jd_kw_set = {k for k, _ in jd_kw}
 
-    # Score each experience by keyword overlap.
-    scored: List[Tuple[int, Experience]] = []
-    for e in experiences:
-        s = score_overlap(jd_kw_set, e.body + " " + (e.header or ""))
-        scored.append((s, e))
+    # Score each experience by keyword overlap (dominant) + deterministic priors.
+    pinned = _pinned_exp_ids_from_env()
 
-    scored.sort(key=lambda x: (-x[0], x[1].exp_id))
-    selected = [e for s, e in scored if s > 0][:max_exps]
+    # Compute a ref year for recency scaling.
+    all_years: List[int] = []
+    for e in experiences:
+        if e.dates:
+            all_years.extend(_extract_years(e.dates))
+    ref_year = max(all_years) if all_years else None
+
+    scored: List[Tuple[int, dict, Experience]] = []
+    for e in experiences:
+        blob = e.body + " " + (e.header or "")
+        overlap = score_overlap(jd_kw_set, blob)
+        hard_skill_matches = _hard_skill_match_count(blob)
+        hard_skill_bonus = HARD_SKILL_BOOST_PER_MATCH * hard_skill_matches
+        recency_bonus = _recency_score(e.dates, ref_year)
+        pinned_bonus = PINNED_EXP_BONUS if e.exp_id in pinned else 0
+
+        total = overlap * OVERLAP_MULTIPLIER + hard_skill_bonus + recency_bonus + pinned_bonus
+
+        scored.append(
+            (
+                total,
+                {
+                    "overlap": overlap,
+                    "overlap_multiplier": OVERLAP_MULTIPLIER,
+                    "hard_skill_matches": hard_skill_matches,
+                    "hard_skill_bonus": hard_skill_bonus,
+                    "recency_bonus": recency_bonus,
+                    "pinned_bonus": pinned_bonus,
+                    "total": total,
+                },
+                e,
+            )
+        )
+
+    score_debug_by_exp_id = {e.exp_id: dbg for _total, dbg, e in scored}
+
+    scored.sort(key=lambda x: (-x[0], x[2].exp_id))
+    selected = [e for total, dbg, e in scored if dbg["overlap"] > 0][:max_exps]
 
     # For each selected experience: pick top snippet candidates as "evidence snippets".
     selected_evidence = []
@@ -425,7 +530,8 @@ def build_artifacts(jd_text: str, experiences: List[Experience], max_exps: int =
             {
                 "exp_id": e.exp_id,
                 "header": e.header,
-                "score": score_overlap(jd_kw_set, e.body + " " + (e.header or "")),
+                "score": score_debug_by_exp_id.get(e.exp_id, {}).get("total", 0),
+                "score_breakdown": score_debug_by_exp_id.get(e.exp_id, {}),
                 "snippets": snippets,
             }
         )
@@ -448,6 +554,14 @@ def build_artifacts(jd_text: str, experiences: List[Experience], max_exps: int =
             "type": "unigrams+selected_bigrams",
             "phrase_whitelist": sorted(["_".join(p) for p in PHRASE_WHITELIST]),
             "stopword_count": len(STOPWORDS),
+        },
+        "selection_model": {
+            "type": "overlap+priors",
+            "overlap_multiplier": OVERLAP_MULTIPLIER,
+            "hard_skill_boost_per_match": HARD_SKILL_BOOST_PER_MATCH,
+            "recency_boost_max": RECENCY_BOOST_MAX,
+            "pinned_exp_bonus": PINNED_EXP_BONUS,
+            "pinned_env": "RESUME_TAILOR_PIN_EXP_IDS",
         },
     }
 
@@ -478,6 +592,7 @@ def build_artifacts(jd_text: str, experiences: List[Experience], max_exps: int =
             "This is a deterministic stub: overlap scoring only.",
             "JD profiling uses unigrams + selected bigram phrases (e.g., time_series).",
             "Evidence extraction enforces paragraph boundaries (no snippet bleed across sections).",
+            "Experience selection uses overlap scoring plus deterministic priors (hard-skill boost, recency bonus, optional pinned exp_ids via RESUME_TAILOR_PIN_EXP_IDS).",
             "Missing keywords are not necessarily bad; they can flag areas to review.",
         ],
     }
