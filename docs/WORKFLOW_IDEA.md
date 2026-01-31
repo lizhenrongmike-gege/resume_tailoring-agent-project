@@ -74,3 +74,21 @@ Disk-first, git-friendly:
 - `runs/` folder holds small text/JSON files.
 - Storage size stays modest; each resume is kilobytes.
 - Later, if you want search + analytics, add SQLite.
+
+## Deterministic dry-run (no LLM)
+For reproducible local testing (and to ensure we always emit artifacts even when the ADK stack/LLM creds aren’t present), use:
+
+```bash
+cd /home/ubuntu/clawd/resume_tailoring-agent-project
+PYTHONPATH=my-fullstack-agent .venv/bin/python -m resume_tailoring.cli dry-run \
+  --jd examples/sample_jd_data_analyst.txt \
+  --experience_bank private/experience_bank/mike_experience_bank_raw.md \
+  --out_dir runs/test_cli_dry_run
+```
+
+This shells out to `tools/run_dry_run_stub.py` and generates:
+- `jd_profile.json`
+- `evidence_index.json`
+- `selected_evidence.json`
+- `tailored_resume.md`
+- `lint_report.json`
