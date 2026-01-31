@@ -34,10 +34,153 @@ from typing import Dict, List, Tuple
 
 
 STOPWORDS = {
-    "a","an","the","and","or","but","if","then","else","when","while","to","of","in","on","for","with","as","at","by",
-    "is","are","was","were","be","been","being","this","that","these","those","it","its","we","our","you","your","they","their",
-    "from","into","over","under","within","across","about","than","not","no","yes","will","would","can","could","should","may","might",
-    "using","use","used","work","works","working","experience","role","team","skills","ability","responsibilities","requirements",
+    # Articles / conjunctions / prepositions
+    "a",
+    "an",
+    "the",
+    "and",
+    "or",
+    "but",
+    "if",
+    "then",
+    "else",
+    "when",
+    "while",
+    "to",
+    "of",
+    "in",
+    "on",
+    "for",
+    "with",
+    "as",
+    "at",
+    "by",
+    "from",
+    "into",
+    "over",
+    "under",
+    "within",
+    "across",
+    "about",
+    "than",
+    # Pronouns / auxiliaries
+    "is",
+    "are",
+    "was",
+    "were",
+    "be",
+    "been",
+    "being",
+    "this",
+    "that",
+    "these",
+    "those",
+    "it",
+    "its",
+    "we",
+    "our",
+    "you",
+    "your",
+    "they",
+    "their",
+    "not",
+    "no",
+    "yes",
+    "will",
+    "would",
+    "can",
+    "could",
+    "should",
+    "may",
+    "might",
+    # Generic job/resume words we want to down-weight for retrieval
+    "using",
+    "use",
+    "used",
+    "work",
+    "works",
+    "working",
+    "experience",
+    "role",
+    "team",
+    "skills",
+    "skill",
+    "ability",
+    "responsibilities",
+    "requirements",
+    "requirement",
+    "responsible",
+    "strong",
+    "excellent",
+    "knowledge",
+    "proficient",
+    "familiar",
+    "help",
+    "support",
+    "including",
+    "include",
+    "etc",
+    # Generic tech-ish words that are usually too broad to help
+    "data",
+    "analysis",
+    "analytics",
+    "model",
+    "models",
+    "system",
+    "systems",
+    "process",
+    "processes",
+    "results",
+    "result",
+    "impact",
+    "business",
+    "yield",
+    "technical",
+}
+
+# Common multi-word skills/phrases we want to recognize deterministically.
+# Represented as tuples of tokens.
+PHRASE_WHITELIST = {
+    ("time", "series"),
+    ("machine", "learning"),
+    ("deep", "learning"),
+    ("data", "pipeline"),
+    ("etl", "pipeline"),
+    ("sql", "server"),
+    ("risk", "management"),
+    ("natural", "language"),
+    ("language", "model"),
+    ("large", "language"),
+    ("language", "models"),
+    ("high", "frequency"),
+    ("real", "time"),
+}
+
+# Tokens that are often too generic in JDs/resumes.
+GENERIC_TOKENS = {
+    "data",
+    "analysis",
+    "analytics",
+    "model",
+    "models",
+    "project",
+    "projects",
+    "business",
+    "team",
+    "stakeholders",
+    "stakeholder",
+    "solution",
+    "solutions",
+    "insight",
+    "insights",
+    "optimize",
+    "optimization",
+    "improve",
+    "improvement",
+    "develop",
+    "developed",
+    "building",
+    "built",
 }
 
 
@@ -46,17 +189,67 @@ def _read_text(path: str) -> str:
         return f.read()
 
 
-def _tokenize(text: str) -> List[str]:
-    # Lowercase, keep alphanumerics, split.
-    tokens = re.findall(r"[a-zA-Z][a-zA-Z0-9_+.-]{1,}", text.lower())
-    return [t for t in tokens if t not in STOPWORDS and len(t) >= 3]
+def _tokenize_unigrams(text: str) -> List[str]:
+    """Tokenize into unigram tokens.
+
+    Notes:
+    - This is deterministic and intentionally simple.
+    - We keep common JD/resume tokens like "etl" / "sql" / "kpi" (>=3 chars)
+      but drop high-noise stopwords.
+    """
+
+    raw = re.findall(r"[a-zA-Z][a-zA-Z0-9_+.-]{1,}", text.lower())
+    tokens = [t.strip(".,;:()[]{}<>\"'!") for t in raw]
+    return [t for t in tokens if t and t not in STOPWORDS and len(t) >= 3]
 
 
-def _top_keywords(text: str, k: int = 40) -> List[Tuple[str, int]]:
+def _extract_terms(text: str) -> List[str]:
+    """Extract retrieval terms (unigrams + selected bigrams).
+
+    We represent bigrams as "token1_token2".
+    """
+
+    uni = _tokenize_unigrams(text)
+
+    # Count bigrams over the unigram stream.
+    bigram_counts: Dict[Tuple[str, str], int] = {}
+    for a, b in zip(uni, uni[1:]):
+        bigram_counts[(a, b)] = bigram_counts.get((a, b), 0) + 1
+
+    terms: List[str] = list(uni)
+
+    # Add phrase bigrams:
+    # - Always include whitelisted phrases if present.
+    # - Also include frequent bigrams (>=2) when not both generic.
+    for (a, b), c in bigram_counts.items():
+        if (a, b) in PHRASE_WHITELIST:
+            terms.append(f"{a}_{b}")
+            continue
+        if c >= 2 and not (a in GENERIC_TOKENS and b in GENERIC_TOKENS):
+            terms.append(f"{a}_{b}")
+
+    return terms
+
+
+def _top_keywords(text: str, k: int = 60) -> List[Tuple[str, int]]:
+    """Return top terms for profiling.
+
+    This replaces the older unigram-only keyword list with:
+    - fewer generic terms
+    - some bigram phrases (time_series, machine_learning, ...)
+    """
+
     freq: Dict[str, int] = {}
-    for t in _tokenize(text):
+    for t in _extract_terms(text):
         freq[t] = freq.get(t, 0) + 1
-    return sorted(freq.items(), key=lambda kv: (-kv[1], kv[0]))[:k]
+
+    # Slightly down-weight generic tokens (so they don't dominate the top-k).
+    for gt in GENERIC_TOKENS:
+        if gt in freq:
+            freq[gt] = max(0, freq[gt] - 1)
+
+    items = [(t, c) for t, c in freq.items() if c > 0]
+    return sorted(items, key=lambda kv: (-kv[1], kv[0]))[:k]
 
 
 @dataclass
@@ -177,7 +370,7 @@ def extract_evidence_snippets(exp_body: str) -> List[dict]:
 
 
 def score_overlap(jd_keywords: set[str], text: str) -> int:
-    toks = set(_tokenize(text))
+    toks = set(_extract_terms(text))
     return len(jd_keywords.intersection(toks))
 
 
@@ -241,7 +434,7 @@ def build_artifacts(jd_text: str, experiences: List[Experience], max_exps: int =
     covered = set()
     for item in selected_evidence:
         for sn in item["snippets"]:
-            covered |= set(_tokenize(sn["text"]))
+            covered |= set(_extract_terms(sn["text"]))
 
     top_kw = [k for k, _ in jd_kw][:40]
     missing_top_kw = [k for k in top_kw if k not in covered]
@@ -249,7 +442,13 @@ def build_artifacts(jd_text: str, experiences: List[Experience], max_exps: int =
     jd_profile = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "jd_hash": sha256(jd_text.encode("utf-8")).hexdigest()[:16],
+        # Kept for backward compatibility, but now includes phrases like "time_series".
         "top_keywords": [{"keyword": k, "count": c} for k, c in jd_kw],
+        "keyword_model": {
+            "type": "unigrams+selected_bigrams",
+            "phrase_whitelist": sorted(["_".join(p) for p in PHRASE_WHITELIST]),
+            "stopword_count": len(STOPWORDS),
+        },
     }
 
     evidence_index = {
@@ -277,6 +476,7 @@ def build_artifacts(jd_text: str, experiences: List[Experience], max_exps: int =
         "keyword_coverage_rate": (1 - (len(missing_top_kw) / max(1, len(top_kw)))),
         "notes": [
             "This is a deterministic stub: overlap scoring only.",
+            "JD profiling uses unigrams + selected bigram phrases (e.g., time_series).",
             "Evidence extraction enforces paragraph boundaries (no snippet bleed across sections).",
             "Missing keywords are not necessarily bad; they can flag areas to review.",
         ],
