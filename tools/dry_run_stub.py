@@ -15,6 +15,10 @@ Outputs (in --out_dir):
 - lint_report.json
 
 This is intentionally simple: keyword extraction + overlap-based evidence selection.
+
+Recent improvement:
+- Evidence snippet extraction now enforces **section/paragraph boundaries** so snippets don’t
+  “bleed” across unrelated paragraphs when we normalize whitespace.
 """
 
 from __future__ import annotations
@@ -114,11 +118,62 @@ def parse_experience_bank_md(md: str) -> List[Experience]:
     return exps
 
 
-def sentence_snippets(text: str) -> List[str]:
-    # Very lightweight sentence splitter.
-    # Keep reasonably long sentences.
-    raw = re.split(r"(?<=[.!?])\s+", re.sub(r"\s+", " ", text.strip()))
-    return [s.strip() for s in raw if len(s.strip()) >= 60]
+def _normalize_ws_keep_newlines(text: str) -> str:
+    # Normalize CRLF and strip trailing spaces but keep paragraph boundaries.
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    # Collapse runs of spaces/tabs within lines.
+    text = "\n".join(re.sub(r"[\t ]+", " ", ln).rstrip() for ln in text.split("\n"))
+    return text.strip()
+
+
+def _split_paragraphs(text: str) -> List[str]:
+    text = _normalize_ws_keep_newlines(text)
+    if not text:
+        return []
+    paras = re.split(r"\n\s*\n+", text)
+    return [p.strip() for p in paras if p.strip()]
+
+
+def extract_evidence_snippets(exp_body: str) -> List[dict]:
+    """Extract snippet candidates WITHOUT crossing paragraph boundaries.
+
+    Returns a list of dicts:
+      {"text": ..., "para_idx": int, "kind": "bullet"|"sentence"|"paragraph"}
+
+    This is intentionally heuristic and deterministic.
+    """
+
+    paras = _split_paragraphs(exp_body)
+    out: List[dict] = []
+
+    bullet_re = re.compile(r"^\s*(?:[-*•]|\d+\.)\s+")
+
+    for para_idx, para in enumerate(paras):
+        lines = [ln.strip() for ln in para.split("\n") if ln.strip()]
+
+        # If paragraph looks like a list of bullets, treat each bullet-line separately.
+        bullet_lines = [ln for ln in lines if bullet_re.match(ln)]
+        if bullet_lines and len(bullet_lines) >= max(2, len(lines) // 2):
+            for ln in bullet_lines:
+                text = bullet_re.sub("", ln).strip()
+                if len(text) >= 50:
+                    out.append({"text": text, "para_idx": para_idx, "kind": "bullet"})
+            continue
+
+        # Otherwise, sentence-split within the paragraph (do NOT collapse across paras).
+        flat = re.sub(r"\s+", " ", para.strip())
+        sentences = re.split(r"(?<=[.!?])\s+", flat)
+        kept = [s.strip() for s in sentences if len(s.strip()) >= 60]
+
+        if kept:
+            for s in kept:
+                out.append({"text": s, "para_idx": para_idx, "kind": "sentence"})
+        else:
+            # If we can't get sentences, fall back to the whole paragraph.
+            if len(flat) >= 80:
+                out.append({"text": flat, "para_idx": para_idx, "kind": "paragraph"})
+
+    return out
 
 
 def score_overlap(jd_keywords: set[str], text: str) -> int:
@@ -139,33 +194,54 @@ def build_artifacts(jd_text: str, experiences: List[Experience], max_exps: int =
     scored.sort(key=lambda x: (-x[0], x[1].exp_id))
     selected = [e for s, e in scored if s > 0][:max_exps]
 
-    # For each selected experience: pick top sentences as "evidence snippets".
+    # For each selected experience: pick top snippet candidates as "evidence snippets".
     selected_evidence = []
     for e in selected:
-        snippets = sentence_snippets(e.body)
+        candidates = extract_evidence_snippets(e.body)
         sn_scored = sorted(
-            ((score_overlap(jd_kw_set, sn), sn) for sn in snippets),
-            key=lambda x: (-x[0], -len(x[1])),
+            ((score_overlap(jd_kw_set, c["text"]), c) for c in candidates),
+            key=lambda x: (-x[0], -len(x[1]["text"]), x[1]["para_idx"]),
         )
-        top = [sn for s, sn in sn_scored if s > 0][:3]
-        if not top:
+
+        top_items = [c for s, c in sn_scored if s > 0][:3]
+        if not top_items:
             # Fall back: first ~240 chars of body as a snippet.
-            top = [e.body[:240] + ("..." if len(e.body) > 240 else "")]
+            fallback = re.sub(r"\s+", " ", e.body.strip())
+            top_items = [
+                {
+                    "text": fallback[:240] + ("..." if len(fallback) > 240 else ""),
+                    "para_idx": 0,
+                    "kind": "fallback",
+                }
+            ]
+
+        snippets = []
+        for idx, item in enumerate(top_items, start=1):
+            sn_id = f"sn{idx}"
+            snippets.append(
+                {
+                    "sn_id": sn_id,
+                    "text": item["text"],
+                    "score": score_overlap(jd_kw_set, item["text"]),
+                    "para_idx": item.get("para_idx", 0),
+                    "kind": item.get("kind", "unknown"),
+                }
+            )
 
         selected_evidence.append(
             {
                 "exp_id": e.exp_id,
                 "header": e.header,
                 "score": score_overlap(jd_kw_set, e.body + " " + (e.header or "")),
-                "snippets": top,
+                "snippets": snippets,
             }
         )
 
-    # Keyword coverage: keywords that appear in selected evidence snippets.
+    # Keyword coverage: keywords that appear in selected evidence snippet texts.
     covered = set()
     for item in selected_evidence:
         for sn in item["snippets"]:
-            covered |= set(_tokenize(sn))
+            covered |= set(_tokenize(sn["text"]))
 
     top_kw = [k for k, _ in jd_kw][:40]
     missing_top_kw = [k for k in top_kw if k not in covered]
@@ -201,6 +277,7 @@ def build_artifacts(jd_text: str, experiences: List[Experience], max_exps: int =
         "keyword_coverage_rate": (1 - (len(missing_top_kw) / max(1, len(top_kw)))),
         "notes": [
             "This is a deterministic stub: overlap scoring only.",
+            "Evidence extraction enforces paragraph boundaries (no snippet bleed across sections).",
             "Missing keywords are not necessarily bad; they can flag areas to review.",
         ],
     }
@@ -208,17 +285,17 @@ def build_artifacts(jd_text: str, experiences: List[Experience], max_exps: int =
     tailored_md_lines = []
     tailored_md_lines.append("# Tailored Resume Draft (stub)")
     tailored_md_lines.append("")
-    tailored_md_lines.append("This file is generated WITHOUT an LLM. It only rearranges/quotes existing experience text as draft bullets with evidence references.")
+    tailored_md_lines.append(
+        "This file is generated WITHOUT an LLM. It only rearranges/quotes existing experience text as draft bullets with evidence references."
+    )
     tailored_md_lines.append("")
 
     for item in selected_evidence:
         tailored_md_lines.append(f"## {item['header']}")
         tailored_md_lines.append("")
-        for i, sn in enumerate(item["snippets"], start=1):
-            # Evidence ref is deterministic.
-            ref = f"(evidence: {item['exp_id']}#sn{i})"
-            # Make it bullet-like without rewriting claims.
-            bullet = sn
+        for sn in item["snippets"]:
+            ref = f"(evidence: {item['exp_id']}#{sn['sn_id']})"
+            bullet = sn["text"]
             tailored_md_lines.append(f"- {bullet} {ref}")
         tailored_md_lines.append("")
 
